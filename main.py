@@ -1,14 +1,15 @@
 import json
 import random
-import time
 import re
+import time
 
+from faker import Faker
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 BROWSER_FIREFOX = "1"
 BROWSER_CHROME = "2"
@@ -16,6 +17,7 @@ CONFIG_FILE_PATH = "config.json"
 TEXT_FIELD_SELECTOR = "div.quantumWizTextinputPaperinputMainContent"
 QUESTION_SELECTOR = "div.Qr7Oae[role='listitem']"
 
+fake = Faker('ru_RU')
 
 def pick_browser(browser_choice):
     print(f"Picking browser: {browser_choice}")
@@ -36,14 +38,18 @@ def configure_driver(browser_choice):
     print("Configuring driver")
     if browser_choice == BROWSER_FIREFOX:
         firefox_options = Options()
-        firefox_options.binary_location = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        firefox_options.binary_location = (
+            r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        )
         service = Service(executable_path="geckodriver.exe")
         driver = webdriver.Firefox(options=firefox_options, service=service)
         print("Firefox driver configured")
         return driver
     elif browser_choice == BROWSER_CHROME:
         chrome_options = webdriver.ChromeOptions()
-        chrome_options.binary_location = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        chrome_options.binary_location = (
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        )
         service = Service(executable_path="chromedriver.exe")
         driver = webdriver.Chrome(options=chrome_options, service=service)
         print("Chrome driver configured")
@@ -64,17 +70,24 @@ def navigate_to_form(driver, form_url):
         print(f"Error loading form: {e}")
 
 
-def fill_text_fields(element, text="Lorem Ipsum"):
-    try:
-        input_field = element.find_element(By.CSS_SELECTOR, "input")
-        input_field.send_keys(text)
-        print("Text field filled")
-    except Exception as e:
-        print(f"Error filling text field: {e}")
+def fill_text_fields(question):
+    input_fields = question.find_elements(By.XPATH, ".//input[@type='text']")
+    for input_field in input_fields:
+        try:
+            label = input_field.find_element(By.XPATH, "./preceding-sibling::label | ./ancestor::div[contains(@class, 'some-class-for-labels')][1]").text
+        except Exception as e:
+            label = extract_question_title(question)
+
+        if "города" in label or "поселка" in label or "место" in label or "проживания" in label:
+            input_field.send_keys(fake.city())
+        elif "лет" in label or "полных лет" in label or "возраст" in label:
+            input_field.send_keys(fake.random_int(min=18, max=40))
+        else:
+            input_field.send_keys("Затрудняюсь ответить")
+        print(f"Text field filled for: {label}")
 
 
 def extract_data_params(question):
-    # Attempt to extract data parameters from the question element
     try:
         data_model = question.find_element(By.CSS_SELECTOR, 'div[jsmodel="CP1oW"]')
         return data_model.get_attribute("data-params")
@@ -82,21 +95,23 @@ def extract_data_params(question):
         print(f"Could not find data-params: {e}")
         return None
 
+
 def determine_question_type(data_params):
-    # Determine the type of question based on data parameters
     question_type = "unknown"
     if data_params:
-        type_match = re.search(r'null,(\d+),', data_params)
+        type_match = re.search(r"null,(\d+),", data_params)
         if type_match:
             type_number = type_match.group(1)
             if type_number == "2":
                 question_type = "single"
             elif type_number == "4":
                 question_type = "multiple"
+            elif type_number == "3": 
+                question_type = "multiselect"
             elif type_number == "7":
                 question_type = "grid"
-            print(f"Type parameter extracted: {type_number}")
     return question_type
+
 
 def determine_selection_limits(data_params):
     min_selections = None
@@ -108,11 +123,13 @@ def determine_selection_limits(data_params):
             max_selections = int(match.group(1))
     return min_selections, max_selections
 
+
 def parse_options(question, question_type):
-    # Parse options based on the type of question
     options = []
-    if question_type in ["single", "multiple"]:
-        option_elements = question.find_elements(By.CSS_SELECTOR, "[role='radio'], [role='checkbox']")
+    if question_type in ["single", "multiple", "multiselect"]:
+        option_elements = question.find_elements(
+            By.CSS_SELECTOR, "[role='radio'], [role='checkbox']"
+        )
         for opt in option_elements:
             try:
                 option_text = opt.get_attribute("aria-label").strip()
@@ -122,17 +139,21 @@ def parse_options(question, question_type):
     elif question_type == "grid":
         row_elements = question.find_elements(By.CSS_SELECTOR, "div.EzyPc")
         for row in row_elements:
-            cell_elements = row.find_elements(By.CSS_SELECTOR, "[role='checkbox'], [role='radio']")
+            cell_elements = row.find_elements(
+                By.CSS_SELECTOR, "[role='checkbox'], [role='radio']"
+            )
             for cell in cell_elements:
                 try:
-                    option_text = cell.get_attribute("aria-label").split("Ответ: ")[1].strip(".")
+                    option_text = (
+                        cell.get_attribute("aria-label").split("Ответ: ")[1].strip(".")
+                    )
                     options.append((cell, option_text))
                 except Exception as e:
                     print(f"Error parsing grid option: {e}")
     return options
 
+
 def extract_question_title(question):
-    # Extract the title of the question
     try:
         title_element = question.find_element(By.CSS_SELECTOR, "div.HoXoMd")
         return title_element.text
@@ -140,12 +161,12 @@ def extract_question_title(question):
         print(f"Could not find question title: {e}")
         return "No Title"
 
+
 def check_if_required(question):
-    # Check if the question is marked as required
     return "Обязательный вопрос" in question.text
 
+
 def parse_question(question):
-    # Main function to parse the question
     print("Parsing question")
     data_params = extract_data_params(question)
     question_type = determine_question_type(data_params)
@@ -153,7 +174,15 @@ def parse_question(question):
     options = parse_options(question, question_type)
     title = extract_question_title(question)
     required = check_if_required(question)
-    print(f"Final question type: {question_type}, Min: {min_selections}, Max: {max_selections}")
+    if question_type == "multiselect":
+        if options:
+            selected_option = random.choice(options)
+            selected_option[0].click()
+        else:
+            print("No options available for multiselect question")
+    print(
+        f"Final question type: {question_type}, Min: {min_selections}, Max: {max_selections}"
+    )
     return title, options, required, question_type, min_selections, max_selections
 
 
@@ -213,9 +242,16 @@ def handle_grid_question(options):
             print(f"Error clicking on grid option '{option_text}': {e}")
 
 
+def is_text_question(question):
+    input_elements = question.find_elements(By.CSS_SELECTOR, "input[type='text']")
+    return len(input_elements) > 0
+
+
 def submit_form(driver):
     try:
-        submit_button = driver.find_element(By.CSS_SELECTOR, "div[role='button'][aria-label='Submit']")
+        submit_button = driver.find_element(
+            By.CSS_SELECTOR, "div[role='button'][aria-label='Submit']"
+        )
         submit_button.click()
         print("Form submitted successfully")
     except Exception as e:
@@ -226,6 +262,7 @@ def fill_form(driver):
     print("Filling form")
     question_elements = driver.find_elements(By.CSS_SELECTOR, QUESTION_SELECTOR)
     print(f"Found {len(question_elements)} questions")
+
     for idx, question in enumerate(question_elements, 1):
         print(f"Processing question {idx}")
         title, options, required, question_type, min_sel, max_sel = parse_question(question)
@@ -235,17 +272,15 @@ def fill_form(driver):
             handle_multiple_choice_question(options, min_sel, max_sel)
         elif question_type == "grid":
             handle_grid_question(options)
-    text_elements = driver.find_elements(By.CSS_SELECTOR, TEXT_FIELD_SELECTOR)
-    print(f"Found {len(text_elements)} text fields to fill")
-    for idx, element in enumerate(text_elements, 1):
-        print(f"Filling text field {idx}")
-        fill_text_fields(element)
-    submit_form(driver) 
+        if is_text_question(question):
+            fill_text_fields(question)
+
+    submit_form(driver)
 
 
 def reset_driver_to_initial_state(driver, initial_url):
     driver.delete_all_cookies()
-    driver.get(initial_url) 
+    driver.get(initial_url)
 
 
 def load_or_request_config():
@@ -257,7 +292,9 @@ def load_or_request_config():
     except FileNotFoundError:
         print("Configuration file not found. Requesting input from user.")
         config = {
-            "browser_choice": input("Please enter the browser choice (1 for Firefox, 2 for Chrome): "),
+            "browser_choice": input(
+                "Please enter the browser choice (1 for Firefox, 2 for Chrome): "
+            ),
             "form_link": input("Please enter the form link: "),
         }
         with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as file:
@@ -271,7 +308,7 @@ def main():
     config = load_or_request_config()
     driver = configure_driver(config["browser_choice"])
     form_url = define_form_link(config["form_link"])
-    number_of_times = int(input("Enter the number of times to fill the form: ")) 
+    number_of_times = int(input("Enter the number of times to fill the form: "))
 
     for _ in range(number_of_times):
         navigate_to_form(driver, form_url)
